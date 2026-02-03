@@ -6,15 +6,18 @@ import threading
 import socket
 import json
 import logging
-import time
 import select
 import queue
+import workthread
+import worktask
 
 _host = "localhost"
 _port = 9987
 
 _mc_client = None
 _lock = threading.Lock()
+
+_work_thread = None
 
 
 logging.basicConfig(level=logging.INFO,
@@ -99,85 +102,6 @@ class MCClient:
             self.client_socket.close()
             self.client_socket = None
 
-            
-
-def _handle_client_message(server_socket):
-    global _mc_client
-    
-    logger.info(f"beging handle client message...")
-    
-    try:
-        running = True
-        client_sockets = []
-        
-        while running:
-            all_sockets = [server_socket] + client_sockets
-            readable, _, excptional = select.select(all_sockets, [], [], None)
-            
-            with _lock:
-                for socket in readable:
-                    if server_socket == socket:
-                        try:
-                            #接受客户端新连接
-                            new_socket, addr = server_socket.accept()
-                            if _mc_client != None:
-                                logger.warn(f"old mc client is valid when new accept comming! {_mc_client.client_addr}")
-                                _mc_client.close()
-                                _mc_client = None
-                            
-                            logger.info(f"create new mc client with socket {new_socket}")
-                            _mc_client = MCClient(new_socket, addr)
-                            client_sockets.append(new_socket)
-                            logger.info(f"clients socket len is {len(client_sockets)}")
-                        except Exception as ae:
-                            logger.error(f"process accept socket exception : {ae}")
-                    else:
-                        # 先判断异常情况
-                        if not _mc_client:
-                            if socket in client_sockets:
-                                client_sockets.remove(socket)
-                            
-                            logger.error(f"mc client not ready close socket {socket}")
-                            socket.close()
-                            
-                        if _mc_client.client_socket != socket:
-                            logger.error(f"mc client not match close socket {socket}")
-                            if socket in client_sockets:
-                                client_sockets.remove(socket)
-                                socket.close()
-                                
-                        # 正式收取数据
-                        try:
-                            data = socket.recv(4096)
-                            if data:
-                                _mc_client.receive(data)
-                            else:
-                                logger.info(f"mc client closed by peer")
-                                _mc_client.close()
-                                _mc_client = None
-                                client_sockets.remove(socket)
-                        except ConnectionResetError as cer:
-                            logger.error(f"client {_mc_client.client_socket} close by exception")
-                            _mc_client.close()
-                            _mc_client = None
-                            client_sockets.remove(socket)
-                        except BlockingIOError:
-                            continue
-                
-                for exc_socket in excptional:
-                    if exc_socket in client_sockets:
-                        client_sockets.remove(exc_socket)
-                        
-                    if _mc_client.client_socket == exc_socket:
-                        _mc_client.close()
-                        _mc_client = None
-                        logger.info(f"mc client with excaptional close")
-                            
-    except Exception as e:
-        logger.error(f"handle client message exception : {e}")
-        logger.error(f"main socket thread exit!!!")
-
-
 
 @asynccontextmanager
 async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
@@ -185,6 +109,9 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
     创建一个服务端链接，等待MC客户端链接进来
     """
     logger.info(f"enter server_lifespan")
+    
+    global _work_thread
+    
     try:
         try:
             listen_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -193,13 +120,22 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
             listen_socket.listen(1)
             listen_socket.setblocking(False)
             
-            server_thread = threading.Thread(target=_handle_client_message, args=(listen_socket,))
-            server_thread.daemon = True
-            server_thread.start()
+            
+            _work_thread = workthread.WorkThread(args=(listen_socket,))
+            _work_thread.daemon = True
+            _work_thread.start()
         except Exception as e:
-            pass
+            logger.error(f"star server_lifespan exception :{e}")
     
         yield {}
+        
+        def stop_func():
+            _work_thread.stop()
+            #立即返回，不进行异步等待
+            return worktask.TaskStage.Finish
+            
+        stop_task = worktask.WorkTask(worktask.WorkTask.STOP_TASK_ID, stop_func)
+        _work_thread.submit(stop_task)
         
     finally:
         listen_socket.close()

@@ -2,6 +2,7 @@ import enum
 
 
 class TaskStage(enum.Enum):
+    Init = 0
     Wating_Result = 1
     Finish = 2
     
@@ -9,9 +10,14 @@ class TaskStage(enum.Enum):
 class TaskRetCode(enum.Enum):
     Success = 0
     Failed = 1
+    Timeout = 2
 
 
 class WorkTask:
+    
+    STOP_TASK_ID = 1
+    WORK_TASK_ID_BEGIN = 100
+    
     def __init__(self, task_id, func, *args, **kwargs):
         self.args = args
         self.kwargs = kwargs
