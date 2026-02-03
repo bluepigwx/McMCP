@@ -8,6 +8,7 @@ import json
 import logging
 import time
 import select
+import queue
 
 _host = "localhost"
 _port = 9987
@@ -33,30 +34,37 @@ def get_client(check=False):
                 raise Exception(f"None Client")
             
         return _mc_client
-
+        
 
 
 class MCClient:
-    def __init__(self, client_socket):
+    def __init__(self, client_socket, addr):
         self.client_socket = client_socket
+        self.client_addr = addr
         self.buffer = []
         
         
     def send_command(self, cmd_type : str, params : Dict[str, Any] = None) -> Dict[str, Any]:
         logger.info(f"enter send_command : command {cmd_type} params {params}")
         
-        command = {
-            "type":cmd_type,
-            "params":params
-        }
+        def task(task_id : int, result_queue : queue.Queue):
+            command = {
+                "type":cmd_type,
+                "params":params
+            }
+            
+            task_payload = {
+                "id":task_id,
+                "cmd":command,
+                "ret_queue" :result_queue
+            }
         
-        logger.info(f"send cmd {cmd_type} params {params}")
-        self.client_socket.sendall(json.dumps(command).encode("utf-8"))
-        logger.info(f"waiting for respone")
-        
-        json_response = self.receive_response(10)
-        self.client_socket.settimeout(None)
-        return json_response
+            logger.info(f"send cmd {cmd_type} params {params}")
+            try:
+                self.client_socket.sendall(json.dumps(command).encode("utf-8"))
+            except Exception as e:
+                logger.error(f"send command to client faild : {e}")
+                return json.dumps({"retcode":-1, "result":{"message":e}})
     
     
     def receive_response(self, timeout = None):
@@ -113,27 +121,27 @@ def _handle_client_message(server_socket):
                             #接受客户端新连接
                             new_socket, addr = server_socket.accept()
                             if _mc_client != None:
-                                logger.warn(f"old mc client is valid when new accept comming!")
+                                logger.warn(f"old mc client is valid when new accept comming! {_mc_client.client_addr}")
                                 _mc_client.close()
                                 _mc_client = None
                             
-                            logger.info(f"create new mc client with socket {addr}")
-                            _mc_client = MCClient(new_socket)
+                            logger.info(f"create new mc client with socket {new_socket}")
+                            _mc_client = MCClient(new_socket, addr)
                             client_sockets.append(new_socket)
                             logger.info(f"clients socket len is {len(client_sockets)}")
                         except Exception as ae:
-                            logger.error(f"process accept socket exception {ae}")
+                            logger.error(f"process accept socket exception : {ae}")
                     else:
                         # 先判断异常情况
                         if not _mc_client:
-                            logger.error(f"mc client not ready")
                             if socket in client_sockets:
                                 client_sockets.remove(socket)
                             
+                            logger.error(f"mc client not ready close socket {socket}")
                             socket.close()
                             
                         if _mc_client.client_socket != socket:
-                            logger.error(f"mc socket != socket")
+                            logger.error(f"mc client not match close socket {socket}")
                             if socket in client_sockets:
                                 client_sockets.remove(socket)
                                 socket.close()
