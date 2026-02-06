@@ -18,9 +18,8 @@ class WorkTask:
     STOP_TASK_ID = 1
     WORK_TASK_ID_BEGIN = 100
     
-    def __init__(self, task_id, func, *args, **kwargs):
-        self.args = args
-        self.kwargs = kwargs
+    def __init__(self, task_id, func, command):
+        self.command = command
         self.task_id = task_id
         self.func = func
         self.stage = TaskStage.Init

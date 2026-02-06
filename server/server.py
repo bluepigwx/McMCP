@@ -14,14 +14,12 @@ import worktask
 _host = "localhost"
 _port = 9987
 
-_mc_client = None
-_lock = threading.Lock()
 
 _work_thread = None
 
 
 logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                    format="%(asctime)s - %(name)s - [%(filename)s:%(funcName)s:%(lineno)d] - %(levelname)s - %(message)s",
                     handlers=[
                         logging.StreamHandler()
                     ])
@@ -29,78 +27,37 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger("mcp-server")
 logger.setLevel(logging.DEBUG)
 
-
-def get_client(check=False):
-    with _lock:
-        if check == True:
-            if not _mc_client:
-                raise Exception(f"None Client")
-            
-        return _mc_client
-        
-
-
-class MCClient:
-    def __init__(self, client_socket, addr):
-        self.client_socket = client_socket
-        self.client_addr = addr
-        self.buffer = []
-        
-        
-    def send_command(self, cmd_type : str, params : Dict[str, Any] = None) -> Dict[str, Any]:
-        logger.info(f"enter send_command : command {cmd_type} params {params}")
-        
-        def task(task_id : int, result_queue : queue.Queue):
-            command = {
-                "type":cmd_type,
-                "params":params
-            }
-            
-            task_payload = {
-                "id":task_id,
-                "cmd":command,
-                "ret_queue" :result_queue
-            }
-        
-            logger.info(f"send cmd {cmd_type} params {params}")
-            try:
-                self.client_socket.sendall(json.dumps(command).encode("utf-8"))
-            except Exception as e:
-                logger.error(f"send command to client faild : {e}")
-                return json.dumps({"retcode":-1, "result":{"message":e}})
     
     
-    def receive_response(self, timeout = None):
+
+def send_client_command(client_session, cmd_type:str, params:Dict[str, Any])->Dict[str, Any]:
+    """
+    往指定客户端发包
+    """
+    global _work_thread
+    
+    command = {
+        "session":client_session,
+        "cmd":cmd_type,
+        "params":params
+    }
+    
+    def exec_func(params):
+        session_id = params.get("session")
+        session = _work_thread.get_session(session_id)
+        if not session:
+            return worktask.TaskStage.Finish
         
-        buffer = b''
-        
-        self.client_socket.settimeout(timeout)
-        try:
-            while True:
-                data = self.client_socket.recv(8192)
-                if not data:
-                    raise Exception(f"peer closed")
-                
-                buffer += data
-                try:
-                    response = json.loads(buffer.decode("utf-8"))
-                    if response["retcode"] == "success":
-                        return response["result"]
-                    return response
-                except json.JSONDecodeError as je:
-                    continue
-        except Exception as e:
-            logger.error(f"receive exception : {e}")
-        
-        
-    def receive(self, timeout = None):
-        pass
-        
-        
-    def close(self):
-        if self.client_socket != None:
-            self.client_socket.close()
-            self.client_socket = None
+        session.socket.sendall(json.dumps(command).encode("utf-8"))
+        return worktask.TaskStage.Wating_Result
+    
+    
+    result = _work_thread.submit(exec_func, command)
+    if result["ret"] != "ok":
+        return {"ret":"failed"}
+    
+    return {"ret":"success", "result":result["result"]}
+
 
 
 @asynccontextmanager
@@ -129,13 +86,12 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
     
         yield {}
         
-        def stop_func():
+        def stop_func(param):
             _work_thread.stop()
             #立即返回，不进行异步等待
             return worktask.TaskStage.Finish
             
-        stop_task = worktask.WorkTask(worktask.WorkTask.STOP_TASK_ID, stop_func)
-        _work_thread.submit(stop_task)
+        _work_thread.submit(stop_func, {})
         
     finally:
         listen_socket.close()
@@ -191,9 +147,8 @@ def get_prompt()->str:
 @mcp.tool()
 def hello(message : str)->str:
     """发送一条hello消息"""
-    cl = get_client(True)
-    cl.send_command("hello", {"message": message})
-    return f"Hello message sent: {message}"
+    result = send_client_command(1, "hello", {})
+    return json.dumps(result).encode("utf-8")
 
 
 
@@ -205,10 +160,9 @@ def get_scene_info()->str:
     以json形式返回场景中的所有信息，包括摄相机position, forward, up
     场景中每个方块的类型和世界坐标位置等
     """
-    cl = get_client(True)
-    response = cl.send_command("get_scene_info")
-    logger.debug(f"sencen info : {response}")
-    return json.dumps(response)
+    result = send_client_command(1, "get_scene_info", {})
+    logger.debug(f"sencen info : {result}")
+    return json.dumps(result).encode("utf-8")
 
 
 
@@ -220,7 +174,6 @@ def set_scene_blocks(blocks : list)->str:
         blocks: 方块的数组，格式为[{"type":int, "wx":float, "wy":float, "wz":float}, ...]
             其中type为block的数字类型，wx,wy,wz为方块的世界坐标
     """
-    cl = get_client(True)
-    response = cl.send_command("set_blocks", {"blocks":blocks})
-    logger.debug(f"set_blocks response : {response}")
-    return json.dumps(response)
+    result = send_client_command(1, "set_blocks", {"blocks":blocks})
+    logger.debug(f"set_blocks response : {result}")
+    return json.dumps(result).encode("utf-8")
