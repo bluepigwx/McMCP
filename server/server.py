@@ -1,15 +1,12 @@
 from fastmcp import FastMCP
-import sys
 from typing import AsyncIterator, Dict, Any
 from contextlib import asynccontextmanager
 import threading
 import socket
 import json
 import logging
-import select
-import queue
-import workthread
-import worktask
+from . import worktask
+from . import workthread
 
 _host = "localhost"
 _port = 9987
@@ -28,7 +25,6 @@ logger = logging.getLogger("mcp-server")
 logger.setLevel(logging.DEBUG)
 
     
-    
 
 def send_client_command(client_session, cmd_type:str, params:Dict[str, Any])->Dict[str, Any]:
     """
@@ -36,23 +32,32 @@ def send_client_command(client_session, cmd_type:str, params:Dict[str, Any])->Di
     """
     global _work_thread
     
-    command = {
+    context = {
         "session":client_session,
         "cmd":cmd_type,
         "params":params
     }
     
-    def exec_func(params):
-        session_id = params.get("session")
+    def exec_func(context):
+        if threading.current_thread() != _work_thread:
+            raise RuntimeError(f"invalid thread")
+        
+        session_id = context.get("session")
         session = _work_thread.get_session(session_id)
         if not session:
+            logger.error(f"session not found {session_id}")
             return worktask.TaskStage.Finish
+        
+        command = {
+            "cmd":cmd_type,
+            "params":params
+        }
         
         session.socket.sendall(json.dumps(command).encode("utf-8"))
         return worktask.TaskStage.Wating_Result
     
     
-    result = _work_thread.submit(exec_func, command)
+    result = _work_thread.submit(exec_func, context)
     if result["ret"] != "ok":
         return {"ret":"failed"}
     
@@ -78,7 +83,7 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
             listen_socket.setblocking(False)
             
             
-            _work_thread = workthread.WorkThread(args=(listen_socket,))
+            _work_thread = workthread.WorkThread(listen_socket)
             _work_thread.daemon = True
             _work_thread.start()
         except Exception as e:
