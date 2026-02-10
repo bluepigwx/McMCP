@@ -16,7 +16,7 @@ _work_thread = None
 
 
 logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s - %(name)s - [%(filename)s:%(funcName)s:%(lineno)d] - %(levelname)s - %(message)s",
+                    format="[%(asctime)s][%(name)s]-[%(filename)s:%(funcName)s:%(lineno)d][%(levelname)s][%(message)s]",
                     handlers=[
                         logging.StreamHandler()
                     ])
@@ -49,6 +49,7 @@ def send_client_command(client_session, cmd_type:str, params:Dict[str, Any])->Di
             return worktask.TaskStage.Finish
         
         command = {
+            "task_id":context["task_id"],
             "cmd":cmd_type,
             "params":params
         }
@@ -62,6 +63,29 @@ def send_client_command(client_session, cmd_type:str, params:Dict[str, Any])->Di
         return {"ret":"failed"}
     
     return {"ret":"success", "result":result["result"]}
+
+
+def get_avalid_session_id():
+    
+    global _work_thread
+    
+    def exec_func(context):
+        if threading.current_thread() != _work_thread:
+            raise RuntimeError(f"invalid thread")
+        
+        session_id = _work_thread.get_one_session_id()
+        context["result"]["session_id"] = session_id
+        
+        return worktask.TaskStage.Finish
+    
+    result = _work_thread.submit(exec_func, {})
+    if result["ret"] != "ok":
+        return 0
+    
+    logger.debug(f"result: {result}")
+    
+    return result["result"]["session_id"]
+        
 
 
 
@@ -152,7 +176,8 @@ def get_prompt()->str:
 @mcp.tool()
 def hello(message : str)->str:
     """发送一条hello消息"""
-    result = send_client_command(1, "hello", {})
+    session_id = get_avalid_session_id()
+    result = send_client_command(session_id, "hello", {})
     return json.dumps(result).encode("utf-8")
 
 
@@ -165,7 +190,8 @@ def get_scene_info()->str:
     以json形式返回场景中的所有信息，包括摄相机position, forward, up
     场景中每个方块的类型和世界坐标位置等
     """
-    result = send_client_command(1, "get_scene_info", {})
+    session_id = get_avalid_session_id()
+    result = send_client_command(session_id, "get_scene_info", {})
     logger.debug(f"sencen info : {result}")
     return json.dumps(result).encode("utf-8")
 
@@ -179,6 +205,7 @@ def set_scene_blocks(blocks : list)->str:
         blocks: 方块的数组，格式为[{"type":int, "wx":float, "wy":float, "wz":float}, ...]
             其中type为block的数字类型，wx,wy,wz为方块的世界坐标
     """
-    result = send_client_command(1, "set_blocks", {"blocks":blocks})
+    session_id = get_avalid_session_id()
+    result = send_client_command(session_id, "set_blocks", {"blocks":blocks})
     logger.debug(f"set_blocks response : {result}")
     return json.dumps(result).encode("utf-8")

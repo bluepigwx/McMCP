@@ -26,7 +26,8 @@ class WorkTask:
         self.func = func
         self.stage = TaskStage.Init
         
-        self.context.result = {}
+        self.context["result"] = {}
+        self.context["task_id"] = task_id
         
     def exec(self):
         return self.func(self.context)

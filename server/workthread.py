@@ -89,6 +89,19 @@ class WorkThread(threading.Thread):
         return self.client_session_map[session_id]
     
     
+    def get_one_session_id(self):
+        """
+        注意只能在workthread线程内调用
+        """
+        if threading.current_thread() != self:
+            raise RuntimeError(f"invalid thread")
+        
+        for k,v in self.client_session_map.items():
+            return k
+        
+        return 0
+    
+    
     def stop(self):
         """
         注意只能在workthread线程内调用
@@ -142,7 +155,7 @@ class WorkThread(threading.Thread):
                 ret_code = task.exec()
                 if ret_code == worktask.TaskStage.Finish:
                     #任务已经完成则通知调用者线程
-                    result_queue.put((worktask.TaskRetCode.Success, task.context.result))
+                    result_queue.put((worktask.TaskRetCode.Success, task.context["result"]))
                 elif ret_code == worktask.TaskStage.Wating_Result:
                     #任务未完成继续等待网络收包
                     self.waiting_queue[task.task_id] = {
